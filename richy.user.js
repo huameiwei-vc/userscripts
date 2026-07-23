@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Richy
 // @namespace    https://avjb.com/owner-security-test
-// @version      3.1.0
+// @version      3.2.0
 // @author       BlueTeam-PoC
 // @match        https://avjb.com/*
 // @match        https://*.avjb.com/*
@@ -25,7 +25,6 @@
         try {
           const src = Function.prototype.toString.call(listener);
           if (/timeLimit|noplayer|getElementById\(\s*['"]player['"]\s*\)/i.test(src)) {
-            log('blocked timeLimit handler');
             return;
           }
         } catch (_) {}
@@ -85,7 +84,8 @@
     return { m3u8: extractM3u8(html), timeLimit: Number((html.match(/timeLimit\s*=\s*(\d+)/) || [])[1] || 0) };
   }
 
-  async function buildOpenCdnPlaylist(videoId, knownCount) {
+  // 返回 playlist 文本内容（不是 blob URL）
+  async function buildOpenCdnPlaylistText(videoId, knownCount) {
     const bucket = bucketOf(videoId);
     let count = knownCount;
     if (!count) {
@@ -105,7 +105,7 @@
       body += `https://list.avstatic.com/cdn/videos/${bucket}/${videoId}/${String(i).padStart(4,'0')}.jpg\n`;
     }
     body += '#EXT-X-ENDLIST\n';
-    return { count, url: URL.createObjectURL(new Blob([body], { type: 'application/vnd.apple.mpegurl' })) };
+    return { count, text: body };
   }
 
   async function probePlaylist(m3u8) {
@@ -123,62 +123,61 @@
     try { if (window.player?.api) { window.player.api('pause'); window.player.api('stop'); } } catch(_){}
   }
 
-  // ===== 生成 iframe 内部的完整 HTML =====
-  function buildPlayerHTML(m3u8Url) {
+  // ===== iframe srcdoc 内容 =====
+  // m3u8Source: { type: 'url', value: 'https://...' } 或 { type: 'text', value: '#EXTM3U...' }
+  function buildSrcdoc(m3u8Source) {
+    // 根据类型决定 iframe 里怎么拿 m3u8
+    const initScript = m3u8Source.type === 'url'
+      ? `var m3u8Url = ${JSON.stringify(m3u8Source.value)};`
+      : `var m3u8Text = ${JSON.stringify(m3u8Source.value)};
+         var m3u8Url = URL.createObjectURL(new Blob([m3u8Text], {type:'application/vnd.apple.mpegurl'}));`;
+
     return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css">
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { width:100%; height:100%; overflow:hidden; background:#000; }
-  #player-wrap { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
-  video { width:100%; height:100%; object-fit:contain; }
-  .plyr { width:100%; height:100%; }
-  .plyr--video { height:100%; }
-  .plyr__progress input[type=range] { height:12px; }
-  @media (max-width:720px) {
-    .plyr__progress input[type=range] { height:14px; }
-  }
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; background:#000; overflow:hidden; }
+video { width:100%; height:100%; object-fit:contain; }
 </style>
 </head>
 <body>
-<div id="player-wrap">
-  <video id="video" playsinline></video>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"><\/script>
-<script src="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js"><\/script>
+<video id="v" controls playsinline></video>
 <script>
-(function(){
-  const video = document.getElementById('video');
-  const m3u8 = ${JSON.stringify(m3u8Url)};
+${initScript}
 
-  const plyr = new Plyr(video, {
-    controls: ['play-large','play','progress','current-time','duration','mute','volume','fullscreen'],
-    clickToPlay: true,
-    hideControls: true,
-    tooltips: { controls: false, seek: true },
-    fullscreen: { enabled: true, fallback: true, iosNative: true }
-  });
+var video = document.getElementById('v');
 
-  if (Hls.isSupported()) {
-    const hls = new Hls({ enableWorker: true, maxBufferLength: 60 });
-    hls.loadSource(m3u8);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(()=>{}); });
-    hls.on(Hls.Events.ERROR, (_, data) => {
-      if (data.fatal) {
-        document.body.insertAdjacentHTML('beforeend',
-          '<div style="position:fixed;bottom:10px;left:10px;right:10px;padding:8px 12px;background:rgba(225,29,72,0.9);color:#fff;border-radius:8px;font:13px/1.4 system-ui;z-index:9999">播放出错，请尝试 CDN 重建</div>');
-      }
-    });
-  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = m3u8;
-    video.addEventListener('loadedmetadata', () => video.play().catch(()=>{}), { once: true });
-  }
-})();
+function tryHls() {
+  var s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js';
+  s.onload = function() {
+    if (Hls.isSupported()) {
+      var hls = new Hls({ enableWorker:true, maxBufferLength:60 });
+      hls.loadSource(m3u8Url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, function(){ video.play().catch(function(){}); });
+    } else {
+      fallback();
+    }
+  };
+  s.onerror = fallback;
+  document.head.appendChild(s);
+}
+
+function fallback() {
+  video.src = m3u8Url;
+  video.addEventListener('loadedmetadata', function(){ video.play().catch(function(){}); }, {once:true});
+}
+
+// iOS Safari 原生支持 HLS，不需要 hls.js
+if (video.canPlayType('application/vnd.apple.mpegurl')) {
+  fallback();
+} else {
+  tryHls();
+}
 <\/script>
 </body>
 </html>`;
@@ -213,7 +212,7 @@
       #richy-box .richy-btn--p { border-color:transparent; background:#e11d48; }
       #richy-box iframe {
         width:100%; border:none; display:block; background:#000;
-        aspect-ratio: 16/9;
+        aspect-ratio:16/9; max-height:75vh;
       }
       #richy-box .richy-error {
         display:none; padding:10px 14px; color:#fda4af; font:12px/1.4 system-ui;
@@ -236,7 +235,7 @@
           <button type="button" class="richy-btn" id="richy-cdn">CDN 重建</button>
         </div>
       </header>
-      <iframe id="richy-frame" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>
+      <iframe id="richy-frame" allow="autoplay; fullscreen; encrypted-media" allowfullscreen sandbox="allow-scripts allow-same-origin"></iframe>
       <div class="richy-error" id="richy-error"></div>
     `;
 
@@ -264,17 +263,15 @@
     if (box && el) { box.classList.toggle('has-error', !!msg); el.textContent = msg || ''; }
   }
 
-  async function playFull(m3u8) {
+  // m3u8Source: { type:'url', value } 或 { type:'text', value }
+  function playFull(m3u8Source) {
     wipeOfficialPlayer();
     ensureMount();
     showError('');
 
     const frame = document.getElementById('richy-frame');
-    const html = buildPlayerHTML(m3u8);
-    const blob = new Blob([html], { type: 'text/html' });
-    frame.src = URL.createObjectURL(blob);
-
-    log('iframe player loaded', m3u8);
+    frame.srcdoc = buildSrcdoc(m3u8Source);
+    log('iframe player loaded', m3u8Source.type);
   }
 
   // ===== Main =====
@@ -284,31 +281,34 @@
     if (!document.body) await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
 
     try {
-      let m3u8 = null, probe = null;
+      let m3u8Url = null, probe = null;
 
       if (!opts.forceOpenCdn) {
         if (/\/newembed\//.test(location.pathname)) {
-          m3u8 = extractFromPageScripts();
+          m3u8Url = extractFromPageScripts();
         }
-        if (!m3u8) {
+        if (!m3u8Url) {
           const emb = await fetchEmbedM3u8(videoId);
-          m3u8 = emb.m3u8;
+          m3u8Url = emb.m3u8;
           log('embed result', emb);
         }
-        if (m3u8) {
-          probe = await probePlaylist(m3u8);
-          if (probe.totalSec && probe.totalSec <= 20) m3u8 = null;
+        if (m3u8Url) {
+          probe = await probePlaylist(m3u8Url);
+          if (probe.totalSec && probe.totalSec <= 20) m3u8Url = null;
         }
       }
 
-      if (!m3u8 || opts.forceOpenCdn) {
-        const built = await buildOpenCdnPlaylist(videoId, probe?.segs || null);
-        m3u8 = built.url;
-        log('CDN playlist', built.count, 'segs');
+      // 有真实 URL → 直接传给 iframe
+      if (m3u8Url && !opts.forceOpenCdn) {
+        playFull({ type: 'url', value: m3u8Url });
+        return;
       }
 
-      if (!m3u8) { ensureMount(); showError('未能获取完整流'); return; }
-      await playFull(m3u8);
+      // 没有 URL 或强制 CDN → 构建 playlist 文本传给 iframe
+      const built = await buildOpenCdnPlaylistText(videoId, probe?.segs || null);
+      log('CDN playlist', built.count, 'segs');
+      playFull({ type: 'text', value: built.text });
+
     } catch (e) {
       log('error', e);
       ensureMount(); showError(String(e.message || e));
@@ -324,5 +324,5 @@
     }
   }
 
-  window.__RICHY__ = { main, playFull, buildOpenCdnPlaylist };
+  window.__RICHY__ = { main, playFull, buildOpenCdnPlaylistText };
 })();
