@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Richy
 // @namespace    https://avjb.com/owner-security-test
-// @version      2.4.0
+// @version      2.5.0
 // @author       BlueTeam-PoC
 // @match        https://avjb.com/*
 // @match        https://*.avjb.com/*
@@ -128,7 +128,6 @@
         if (r.ok) lo = mid; else hi = mid - 1;
       }
       count = lo + 1;
-      log('open CDN segment count', count);
     }
     let body = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n';
     for (let i = 0; i < count; i++) {
@@ -149,7 +148,7 @@
       const segs = text.split(/\n/).filter((l) => l && !l.startsWith('#'));
       const durs = text.split(/\n/).filter((l) => l.startsWith('#EXTINF:')).map((l) => parseFloat(l.split(':')[1]));
       const total = durs.reduce((a, b) => a + b, 0);
-      return { segs: segs.length, totalSec: Math.round(total), totalMin: (total / 60).toFixed(2), raw: text };
+      return { segs: segs.length, totalSec: Math.round(total), totalMin: (total / 60).toFixed(2) };
     } catch (e) {
       return { error: String(e) };
     }
@@ -174,127 +173,78 @@
     style.id = 'avjb-full-styles';
     style.textContent = `
       #avjb-full-poc, #avjb-full-poc * { box-sizing: border-box; }
-
       #avjb-full-poc {
-        position: relative;
-        z-index: 99990;
-        margin: 16px auto 20px;
-        max-width: 1100px;
-        color: #f5f5f5;
-        font-family: "Segoe UI", system-ui, sans-serif;
-        background: #0b0d12;
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 16px;
-        overflow: hidden;
+        position: relative; z-index: 99990;
+        margin: 16px auto 20px; max-width: 1100px;
+        color: #f5f5f5; font-family: system-ui, sans-serif;
+        background: #0b0d12; border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px; overflow: hidden;
         box-shadow: 0 18px 50px rgba(0,0,0,0.45);
       }
-
       #avjb-full-poc .avjb-head {
         display: flex; align-items: center; justify-content: space-between;
         gap: 12px; padding: 12px 14px;
         border-bottom: 1px solid rgba(255,255,255,0.06);
-        background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent);
       }
-
-      #avjb-full-poc .avjb-head h2 { margin:0; color:#fff; font:600 14px/1.2 system-ui,sans-serif; }
-
-      #avjb-full-poc .avjb-actions { display:flex; flex-wrap:wrap; gap:8px; }
-
+      #avjb-full-poc .avjb-head h2 { margin:0; color:#fff; font:600 14px/1.2 system-ui; }
+      #avjb-full-poc .avjb-actions { display:flex; gap:8px; }
       #avjb-full-poc .avjb-btn {
-        appearance:none; border:1px solid rgba(255,255,255,0.1); border-radius:10px;
-        padding:8px 12px; cursor:pointer; color:#fff; background:rgba(255,255,255,0.04);
-        font:600 12px/1 system-ui,sans-serif;
+        border:1px solid rgba(255,255,255,0.15); border-radius:8px;
+        padding:7px 12px; color:#fff; background:rgba(255,255,255,0.06);
+        font:600 12px/1 system-ui; cursor:pointer;
       }
-      #avjb-full-poc .avjb-btn:active { background:rgba(255,92,122,0.2); }
-      #avjb-full-poc .avjb-btn--p { border-color:transparent; background:linear-gradient(180deg,#ff7a93,#e11d48); }
+      #avjb-full-poc .avjb-btn--p { border-color:transparent; background:#e11d48; }
+      #avjb-full-poc video { width:100%; max-height:75vh; display:block; background:#000; }
 
-      #avjb-full-poc .avjb-stage { background:#000; position:relative; }
-
-      #avjb-full-poc video {
-        width:100%; max-height:75vh; display:block; background:#000;
+      /* 额外进度条 — 用原生 range input */
+      #avjb-full-poc .avjb-extra-seek {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px; background: #111;
       }
-
-      /* ===== 自定义控制栏 ===== */
-      #avjb-full-poc .avjb-controls {
-        display: flex; align-items: center; gap: 10px;
-        padding: 10px 14px;
-        background: rgba(0,0,0,0.92);
-        touch-action: none;
+      #avjb-full-poc .avjb-extra-seek input[type=range] {
+        -webkit-appearance: none; appearance: none;
+        flex: 1; height: 8px; margin: 0; padding: 0;
+        background: rgba(255,255,255,0.15); border-radius: 4px;
+        outline: none; cursor: pointer;
       }
-
-      #avjb-full-poc .avjb-playbtn {
-        appearance: none; border: none; background: none; color: #fff;
-        font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1;
+      #avjb-full-poc .avjb-extra-seek input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none;
+        width: 24px; height: 24px;
+        background: #fff; border: 3px solid #e11d48;
+        border-radius: 50%; margin-top: 0;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.5);
       }
-
-      #avjb-full-poc .avjb-time {
-        color: #aaa; font: 500 11px/1 monospace; white-space: nowrap; min-width: 80px;
+      #avjb-full-poc .avjb-extra-seek input[type=range]::-moz-range-thumb {
+        width: 24px; height: 24px;
+        background: #fff; border: 3px solid #e11d48; border-radius: 50%;
       }
-
-      /* 关键：用原生 <input type="range">，浏览器内核处理触摸，JS 层无法拦截 */
-      #avjb-full-poc .avjb-seek {
-        -webkit-appearance: none;
-        appearance: none;
-        flex: 1;
-        height: 6px;
-        background: rgba(255,255,255,0.2);
-        border-radius: 3px;
-        outline: none;
-        cursor: pointer;
-        margin: 0;
-        padding: 0;
+      #avjb-full-poc .avjb-extra-seek input[type=range]::-moz-range-track {
+        height: 8px; background: rgba(255,255,255,0.15); border-radius: 4px;
       }
-      #avjb-full-poc .avjb-seek::-webkit-slider-runnable-track {
-        height: 6px; background: transparent; border-radius: 3px;
+      #avjb-full-poc .avjb-extra-seek span {
+        color: #ccc; font: 500 12px/1 monospace; white-space: nowrap;
       }
-      #avjb-full-poc .avjb-seek::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 20px; height: 20px;
-        background: #fff;
-        border-radius: 50%;
-        border: 2px solid #e11d48;
-        margin-top: -7px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.4);
-      }
-      #avjb-full-poc .avjb-seek::-moz-range-thumb {
-        width: 20px; height: 20px;
-        background: #fff; border-radius: 50%;
-        border: 2px solid #e11d48;
-      }
-      #avjb-full-poc .avjb-seek::-moz-range-track {
-        height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px;
-      }
-
-      #avjb-full-poc .avjb-fullbtn {
-        appearance: none; border: none; background: none; color: #fff;
-        font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1;
-      }
-
       #avjb-full-poc .avjb-foot {
-        display: none; padding: 10px 14px;
-        border-top: 1px solid rgba(255,255,255,0.06);
-        color: #fda4af; font: 500 12px/1.4 system-ui,sans-serif;
+        display:none; padding:10px 14px; color:#fda4af; font:500 12px/1.4 system-ui;
       }
-      #avjb-full-poc.avjb-has-error .avjb-foot { display: block; }
+      #avjb-full-poc.avjb-has-error .avjb-foot { display:block; }
 
       @media (max-width: 720px) {
-        #avjb-full-poc { margin: 10px 8px 16px; border-radius: 12px; }
+        #avjb-full-poc { margin:10px 8px 16px; border-radius:12px; }
         #avjb-full-poc .avjb-head { flex-direction:column; align-items:stretch; }
-        #avjb-full-poc .avjb-seek::-webkit-slider-thumb { width:24px; height:24px; margin-top:-9px; }
-        #avjb-full-poc .avjb-seek { height: 8px; }
-        #avjb-full-poc .avjb-controls { padding: 12px 14px; gap: 8px; }
+        #avjb-full-poc .avjb-extra-seek input[type=range] { height: 10px; }
+        #avjb-full-poc .avjb-extra-seek input[type=range]::-webkit-slider-thumb {
+          width: 28px; height: 28px;
+        }
       }
     `;
     document.documentElement.appendChild(style);
   }
 
-  function fmtTime(sec) {
-    if (!isFinite(sec) || sec < 0) return '0:00';
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = Math.floor(sec % 60);
-    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+  function fmtTime(s) {
+    if (!isFinite(s) || s < 0) return '0:00';
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+    return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
   }
 
   function ensureMount() {
@@ -312,14 +262,11 @@
           <button type="button" class="avjb-btn" id="poc-opencdn">CDN 重建</button>
         </div>
       </header>
-      <div class="avjb-stage">
-        <video id="avjb-full-video" playsinline></video>
-      </div>
-      <div class="avjb-controls">
-        <button type="button" class="avjb-playbtn" id="avjb-playbtn">▶</button>
-        <input type="range" class="avjb-seek" id="avjb-seek" min="0" max="1000" value="0" step="1">
-        <span class="avjb-time" id="avjb-time">0:00 / 0:00</span>
-        <button type="button" class="avjb-fullbtn" id="avjb-fullbtn">⛶</button>
+      <video id="avjb-full-video" controls playsinline></video>
+      <div class="avjb-extra-seek">
+        <span id="avjb-cur">0:00</span>
+        <input type="range" id="avjb-range" min="0" max="10000" value="0" step="1">
+        <span id="avjb-dur">0:00</span>
       </div>
       <div class="avjb-foot" id="avjb-full-status"></div>
     `;
@@ -337,8 +284,8 @@
       document.body.prepend(box);
     }
 
-    box.querySelector('#poc-replay')?.addEventListener('click', () => main({ force: true }));
-    box.querySelector('#poc-opencdn')?.addEventListener('click', () => main({ forceOpenCdn: true }));
+    box.querySelector('#poc-replay').addEventListener('click', () => main({ force: true }));
+    box.querySelector('#poc-opencdn').addEventListener('click', () => main({ forceOpenCdn: true }));
     return box;
   }
 
@@ -350,69 +297,43 @@
     else { box.classList.remove('avjb-has-error'); el.textContent = ''; }
   }
 
-  function wireControls(video) {
-    const seekInput = document.getElementById('avjb-seek');
-    const timeLabel = document.getElementById('avjb-time');
-    const playBtn = document.getElementById('avjb-playbtn');
-    const fullBtn = document.getElementById('avjb-fullbtn');
+  function wireSeekbar(video) {
+    const range = document.getElementById('avjb-range');
+    const curEl = document.getElementById('avjb-cur');
+    const durEl = document.getElementById('avjb-dur');
+    if (!range || !video) return;
 
-    if (!seekInput || !video) return;
-
-    let isSeeking = false;
-
-    // Play/Pause button
-    playBtn.addEventListener('click', () => {
-      if (video.paused) video.play(); else video.pause();
-    });
-    video.addEventListener('play', () => { playBtn.textContent = '⏸'; });
-    video.addEventListener('pause', () => { playBtn.textContent = '▶'; });
-
-    // Fullscreen
-    fullBtn.addEventListener('click', () => {
-      const poc = document.getElementById('avjb-full-poc');
-      if (document.fullscreenElement || document.webkitFullscreenElement) {
-        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-      } else if (poc) {
-        (poc.requestFullscreen || poc.webkitRequestFullscreen).call(poc);
-      }
-    });
-
-    // Tap on video to play/pause
-    video.addEventListener('click', () => {
-      if (video.paused) video.play(); else video.pause();
-    });
-
-    // Time update → sync slider
-    video.addEventListener('timeupdate', () => {
-      if (isSeeking) return;
-      const dur = video.duration || 0;
-      const cur = video.currentTime || 0;
-      seekInput.value = dur > 0 ? Math.round((cur / dur) * 1000) : 0;
-      timeLabel.textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
-    });
+    let dragging = false;
 
     video.addEventListener('loadedmetadata', () => {
-      timeLabel.textContent = `0:00 / ${fmtTime(video.duration)}`;
+      durEl.textContent = fmtTime(video.duration);
+    });
+    video.addEventListener('durationchange', () => {
+      durEl.textContent = fmtTime(video.duration);
+    });
+    video.addEventListener('timeupdate', () => {
+      if (dragging) return;
+      const d = video.duration || 1;
+      range.value = Math.round((video.currentTime / d) * 10000);
+      curEl.textContent = fmtTime(video.currentTime);
     });
 
-    // <input type="range"> 的 input 事件 — 用户正在拖动（实时反馈）
-    seekInput.addEventListener('input', () => {
-      isSeeking = true;
-      const dur = video.duration || 0;
-      const targetTime = (seekInput.value / 1000) * dur;
-      timeLabel.textContent = `${fmtTime(targetTime)} / ${fmtTime(dur)}`;
+    // input = 拖动中实时触发
+    range.addEventListener('input', () => {
+      dragging = true;
+      const d = video.duration || 1;
+      curEl.textContent = fmtTime((range.value / 10000) * d);
+    });
+    // change = 松手
+    range.addEventListener('change', () => {
+      const d = video.duration || 1;
+      video.currentTime = (range.value / 10000) * d;
+      dragging = false;
     });
 
-    // change 事件 — 用户松手，执行真正的 seek
-    seekInput.addEventListener('change', () => {
-      const dur = video.duration || 0;
-      video.currentTime = (seekInput.value / 1000) * dur;
-      isSeeking = false;
-    });
-
-    // 防止 range input 上的触摸事件冒泡到页面（阻止页面全局 handler 干扰）
-    ['touchstart', 'touchmove', 'touchend'].forEach(evt => {
-      seekInput.addEventListener(evt, (e) => e.stopPropagation(), { passive: true });
+    // 阻止触摸事件冒泡，不让页面其他 handler 抢走
+    ['touchstart','touchmove','touchend'].forEach(evtName => {
+      range.addEventListener(evtName, e => e.stopPropagation(), { passive: true });
     });
   }
 
@@ -448,7 +369,7 @@
       return;
     }
 
-    wireControls(video);
+    wireSeekbar(video);
     window.__AVJB_FULL__ = { m3u8, meta, video };
     log('FULL player mounted', { m3u8, meta });
   }
@@ -463,7 +384,6 @@
     if (!document.body) await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
 
     const state = { videoId, source: null, m3u8: null, totalMin: null, segs: null, timeLimit: null };
-
     try {
       let m3u8 = null, source = null, timeLimit = null, probe = null;
 
@@ -481,13 +401,12 @@
         if (m3u8) {
           probe = await probePlaylist(m3u8);
           log('playlist probe', probe);
-          if (probe.totalSec && probe.totalSec <= 20) { log('playlist too short, fallback open CDN'); m3u8 = null; }
+          if (probe.totalSec && probe.totalSec <= 20) { m3u8 = null; }
         }
       }
 
       if (!m3u8 || opts.forceOpenCdn) {
-        const known = probe?.segs || null;
-        const built = await buildOpenCdnPlaylist(videoId, known);
+        const built = await buildOpenCdnPlaylist(videoId, probe?.segs || null);
         m3u8 = built.url; source = 'open-cdn-reconstructed';
         probe = { segs: built.count, totalMin: built.approxMin, totalSec: built.count * 2 };
         log('open CDN playlist', built);
@@ -495,9 +414,8 @@
 
       state.m3u8 = m3u8; state.source = source;
       state.segs = probe?.segs; state.totalMin = probe?.totalMin;
-      state.timeLimit = timeLimit ?? state.timeLimit;
       panel(state);
-      if (!m3u8) { log('FAILED to get full stream'); return; }
+      if (!m3u8) { log('FAILED'); return; }
       await playFull(m3u8, { ...probe, source });
     } catch (e) {
       log('main error', e);
