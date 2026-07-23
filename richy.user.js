@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Richy
 // @namespace    https://avjb.com/owner-security-test
-// @version      2.5.0
+// @version      3.0.0
 // @author       BlueTeam-PoC
 // @match        https://avjb.com/*
 // @match        https://*.avjb.com/*
@@ -16,8 +16,11 @@
   'use strict';
 
   const HLS_CDN = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js';
-  const log = (...a) => console.log('%c[AVJB-FULL-POC]', 'color:#fb7185;font-weight:bold', ...a);
+  const PLYR_JS = 'https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js';
+  const PLYR_CSS = 'https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css';
+  const log = (...a) => console.log('%c[Richy]', 'color:#fb7185;font-weight:bold', ...a);
 
+  // ===== Early hooks: block timeLimit =====
   function installEarlyHooks() {
     const _add = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function (type, listener, options) {
@@ -25,7 +28,7 @@
         try {
           const src = Function.prototype.toString.call(listener);
           if (/timeLimit|noplayer|getElementById\(\s*['"]player['"]\s*\)/i.test(src)) {
-            log('blocked timeLimit timeupdate handler');
+            log('blocked timeLimit handler');
             return;
           }
         } catch (_) {}
@@ -40,10 +43,7 @@
         if (evt === 'timeupdate' && typeof fn === 'function') {
           try {
             const src = Function.prototype.toString.call(fn);
-            if (/timeLimit|noplayer/i.test(src)) {
-              log('blocked player.on(timeupdate) limiter');
-              return obj;
-            }
+            if (/timeLimit|noplayer/i.test(src)) { log('blocked player.on limiter'); return obj; }
           } catch (_) {}
         }
         return raw(evt, fn);
@@ -52,36 +52,24 @@
     };
 
     const t = setInterval(() => {
-      try {
-        if (window.HlsJsPlayer && window.HlsJsPlayer.prototype) {
-          patchOn(window.HlsJsPlayer.prototype);
-        }
-      } catch (_) {}
+      try { if (window.HlsJsPlayer?.prototype) patchOn(window.HlsJsPlayer.prototype); } catch (_) {}
     }, 50);
     setTimeout(() => clearInterval(t), 8000);
   }
 
   installEarlyHooks();
 
+  // ===== Helpers =====
   function videoIdFromLocation() {
-    return (
-      (location.pathname.match(/\/video\/(\d+)\//) || [])[1] ||
-      (location.pathname.match(/\/newembed\/(\d+)/) || [])[1] ||
-      null
-    );
+    return (location.pathname.match(/\/video\/(\d+)\//) || [])[1] ||
+      (location.pathname.match(/\/newembed\/(\d+)/) || [])[1] || null;
   }
 
-  function bucketOf(id) {
-    return Math.floor(Number(id) / 1000) * 1000;
-  }
+  function bucketOf(id) { return Math.floor(Number(id) / 1000) * 1000; }
 
   function extractM3u8(text) {
     if (!text) return null;
-    const patterns = [
-      /https?:\/\/list\.avstatic\.com\/[^'"\s\\]+\.m3u8/,
-      /https?:\/\/[^'"\s\\]+\.m3u8[^'"\s\\]*/,
-    ];
-    for (const re of patterns) {
+    for (const re of [/https?:\/\/list\.avstatic\.com\/[^'"\s\\]+\.m3u8/, /https?:\/\/[^'"\s\\]+\.m3u8[^'"\s\\]*/]) {
       const m = text.match(re);
       if (m) return m[0].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
     }
@@ -89,42 +77,27 @@
   }
 
   function extractFromPageScripts() {
-    const text = Array.from(document.scripts).map((s) => s.textContent || '').join('\n');
+    const text = Array.from(document.scripts).map(s => s.textContent || '').join('\n');
     return extractM3u8(text) || extractM3u8(document.documentElement.innerHTML);
   }
 
   async function fetchEmbedM3u8(videoId) {
     const url = `${location.origin}/newembed/${videoId}`;
-    log('fetch embed for FULL stream', url);
     const res = await fetch(url, { credentials: 'omit', cache: 'no-store' });
     const html = await res.text();
-    const m3u8 = extractM3u8(html);
-    const timeLimit = Number((html.match(/timeLimit\s*=\s*(\d+)/) || [])[1] || 0);
-    return { status: res.status, m3u8, timeLimit, htmlLen: html.length };
+    return { m3u8: extractM3u8(html), timeLimit: Number((html.match(/timeLimit\s*=\s*(\d+)/) || [])[1] || 0) };
   }
 
-  async function loadHls() {
-    if (window.Hls) return window.Hls;
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = HLS_CDN;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('hls.js load failed'));
-      document.head.appendChild(s);
-    });
-    return window.Hls;
-  }
-
-  async function buildOpenCdnPlaylist(videoId, knownSegCount) {
+  async function buildOpenCdnPlaylist(videoId, knownCount) {
     const bucket = bucketOf(videoId);
-    let count = knownSegCount;
+    let count = knownCount;
     if (!count) {
       let lo = 0, hi = 3000;
       const first = await fetch(`https://list.avstatic.com/cdn/videos/${bucket}/${videoId}/0000.jpg`, { method: 'HEAD' });
-      if (!first.ok) throw new Error('open CDN first segment not readable');
+      if (!first.ok) throw new Error('CDN not accessible');
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        const r = await fetch(`https://list.avstatic.com/cdn/videos/${bucket}/${videoId}/${String(mid).padStart(4, '0')}.jpg`, { method: 'HEAD' });
+        const r = await fetch(`https://list.avstatic.com/cdn/videos/${bucket}/${videoId}/${String(mid).padStart(4,'0')}.jpg`, { method: 'HEAD' });
         if (r.ok) lo = mid; else hi = mid - 1;
       }
       count = lo + 1;
@@ -132,143 +105,131 @@
     let body = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n';
     for (let i = 0; i < count; i++) {
       body += '#EXTINF:2.000000,\n';
-      body += `https://list.avstatic.com/cdn/videos/${bucket}/${videoId}/${String(i).padStart(4, '0')}.jpg\n`;
+      body += `https://list.avstatic.com/cdn/videos/${bucket}/${videoId}/${String(i).padStart(4,'0')}.jpg\n`;
     }
     body += '#EXT-X-ENDLIST\n';
-    return {
-      count,
-      url: URL.createObjectURL(new Blob([body], { type: 'application/vnd.apple.mpegurl' })),
-      approxMin: ((count * 2) / 60).toFixed(2),
-    };
+    return { count, url: URL.createObjectURL(new Blob([body], { type: 'application/vnd.apple.mpegurl' })) };
   }
 
   async function probePlaylist(m3u8) {
     try {
       const text = await (await fetch(m3u8)).text();
-      const segs = text.split(/\n/).filter((l) => l && !l.startsWith('#'));
-      const durs = text.split(/\n/).filter((l) => l.startsWith('#EXTINF:')).map((l) => parseFloat(l.split(':')[1]));
+      const durs = text.split('\n').filter(l => l.startsWith('#EXTINF:')).map(l => parseFloat(l.split(':')[1]));
       const total = durs.reduce((a, b) => a + b, 0);
-      return { segs: segs.length, totalSec: Math.round(total), totalMin: (total / 60).toFixed(2) };
-    } catch (e) {
-      return { error: String(e) };
-    }
+      return { segs: durs.length, totalSec: Math.round(total) };
+    } catch (e) { return { error: String(e) }; }
   }
 
-  function wipeOfficialPlayer() {
-    const kill = ['#layer2', '.no-player', '.paywall-v2', '.paywall-guest', '.player-wrap', '#new', '#kt_player', '.fp-player'];
-    kill.forEach((sel) => {
-      document.querySelectorAll(sel).forEach((el) => el.style.setProperty('display', 'none', 'important'));
+  // ===== Load external resources =====
+  function loadCSS(href) {
+    if (document.querySelector(`link[href="${href}"]`)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = href;
+    document.head.appendChild(link);
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
     });
-    try {
-      if (window.player && typeof window.player.api === 'function') {
-        window.player.api('pause');
-        window.player.api('stop');
-      }
-    } catch (_) {}
   }
 
-  function injectStyles() {
-    if (document.getElementById('avjb-full-styles')) return;
-    const style = document.createElement('style');
-    style.id = 'avjb-full-styles';
-    style.textContent = `
-      #avjb-full-poc, #avjb-full-poc * { box-sizing: border-box; }
-      #avjb-full-poc {
+  async function loadHls() {
+    if (window.Hls) return window.Hls;
+    await loadScript(HLS_CDN);
+    return window.Hls;
+  }
+
+  async function loadPlyr() {
+    if (window.Plyr) return window.Plyr;
+    loadCSS(PLYR_CSS);
+    await loadScript(PLYR_JS);
+    return window.Plyr;
+  }
+
+  // ===== Wipe original player =====
+  function wipeOfficialPlayer() {
+    ['#layer2','.no-player','.paywall-v2','.paywall-guest','.player-wrap','#new','#kt_player','.fp-player']
+      .forEach(sel => document.querySelectorAll(sel).forEach(el => el.style.setProperty('display','none','important')));
+    try { if (window.player?.api) { window.player.api('pause'); window.player.api('stop'); } } catch(_){}
+  }
+
+  // ===== Mount & Play =====
+  function injectCustomStyles() {
+    if (document.getElementById('richy-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'richy-styles';
+    s.textContent = `
+      #richy-box {
         position: relative; z-index: 99990;
         margin: 16px auto 20px; max-width: 1100px;
-        color: #f5f5f5; font-family: system-ui, sans-serif;
         background: #0b0d12; border: 1px solid rgba(255,255,255,0.08);
         border-radius: 16px; overflow: hidden;
         box-shadow: 0 18px 50px rgba(0,0,0,0.45);
       }
-      #avjb-full-poc .avjb-head {
-        display: flex; align-items: center; justify-content: space-between;
-        gap: 12px; padding: 12px 14px;
-        border-bottom: 1px solid rgba(255,255,255,0.06);
+      #richy-box .richy-head {
+        display:flex; align-items:center; justify-content:space-between;
+        padding:12px 14px; border-bottom:1px solid rgba(255,255,255,0.06);
       }
-      #avjb-full-poc .avjb-head h2 { margin:0; color:#fff; font:600 14px/1.2 system-ui; }
-      #avjb-full-poc .avjb-actions { display:flex; gap:8px; }
-      #avjb-full-poc .avjb-btn {
+      #richy-box .richy-head h2 { margin:0; color:#fff; font:600 14px/1.2 system-ui,sans-serif; }
+      #richy-box .richy-actions { display:flex; gap:8px; }
+      #richy-box .richy-btn {
         border:1px solid rgba(255,255,255,0.15); border-radius:8px;
         padding:7px 12px; color:#fff; background:rgba(255,255,255,0.06);
         font:600 12px/1 system-ui; cursor:pointer;
       }
-      #avjb-full-poc .avjb-btn--p { border-color:transparent; background:#e11d48; }
-      #avjb-full-poc video { width:100%; max-height:75vh; display:block; background:#000; }
-
-      /* 额外进度条 — 用原生 range input */
-      #avjb-full-poc .avjb-extra-seek {
-        display: flex; align-items: center; gap: 8px;
-        padding: 10px 14px; background: #111;
-      }
-      #avjb-full-poc .avjb-extra-seek input[type=range] {
-        -webkit-appearance: none; appearance: none;
-        flex: 1; height: 8px; margin: 0; padding: 0;
-        background: rgba(255,255,255,0.15); border-radius: 4px;
-        outline: none; cursor: pointer;
-      }
-      #avjb-full-poc .avjb-extra-seek input[type=range]::-webkit-slider-thumb {
-        -webkit-appearance: none; appearance: none;
-        width: 24px; height: 24px;
-        background: #fff; border: 3px solid #e11d48;
-        border-radius: 50%; margin-top: 0;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-      }
-      #avjb-full-poc .avjb-extra-seek input[type=range]::-moz-range-thumb {
-        width: 24px; height: 24px;
-        background: #fff; border: 3px solid #e11d48; border-radius: 50%;
-      }
-      #avjb-full-poc .avjb-extra-seek input[type=range]::-moz-range-track {
-        height: 8px; background: rgba(255,255,255,0.15); border-radius: 4px;
-      }
-      #avjb-full-poc .avjb-extra-seek span {
-        color: #ccc; font: 500 12px/1 monospace; white-space: nowrap;
-      }
-      #avjb-full-poc .avjb-foot {
+      #richy-box .richy-btn--p { border-color:transparent; background:#e11d48; }
+      #richy-box .richy-stage { background:#000; }
+      #richy-box .richy-stage video { width:100%; display:block; }
+      #richy-box .richy-error {
         display:none; padding:10px 14px; color:#fda4af; font:500 12px/1.4 system-ui;
       }
-      #avjb-full-poc.avjb-has-error .avjb-foot { display:block; }
+      #richy-box.has-error .richy-error { display:block; }
+
+      /* Plyr overrides for better mobile touch */
+      #richy-box .plyr { --plyr-color-main: #e11d48; }
+      #richy-box .plyr__progress input[type=range] {
+        height: 12px !important;
+      }
+      #richy-box .plyr__progress input[type=range]::-webkit-slider-thumb {
+        width: 22px !important; height: 22px !important;
+        -webkit-appearance: none !important;
+      }
 
       @media (max-width: 720px) {
-        #avjb-full-poc { margin:10px 8px 16px; border-radius:12px; }
-        #avjb-full-poc .avjb-head { flex-direction:column; align-items:stretch; }
-        #avjb-full-poc .avjb-extra-seek input[type=range] { height: 10px; }
-        #avjb-full-poc .avjb-extra-seek input[type=range]::-webkit-slider-thumb {
-          width: 28px; height: 28px;
+        #richy-box { margin:10px 8px 16px; border-radius:12px; }
+        #richy-box .richy-head { flex-direction:column; align-items:stretch; gap:8px; }
+        #richy-box .plyr__progress input[type=range] { height: 14px !important; }
+        #richy-box .plyr__progress input[type=range]::-webkit-slider-thumb {
+          width: 26px !important; height: 26px !important;
         }
       }
     `;
-    document.documentElement.appendChild(style);
-  }
-
-  function fmtTime(s) {
-    if (!isFinite(s) || s < 0) return '0:00';
-    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
-    return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+    document.documentElement.appendChild(s);
   }
 
   function ensureMount() {
-    injectStyles();
-    let box = document.getElementById('avjb-full-poc');
+    injectCustomStyles();
+    let box = document.getElementById('richy-box');
     if (box) return box;
 
     box = document.createElement('div');
-    box.id = 'avjb-full-poc';
+    box.id = 'richy-box';
     box.innerHTML = `
-      <header class="avjb-head">
+      <header class="richy-head">
         <h2>完整播放</h2>
-        <div class="avjb-actions">
-          <button type="button" class="avjb-btn avjb-btn--p" id="poc-replay">重播</button>
-          <button type="button" class="avjb-btn" id="poc-opencdn">CDN 重建</button>
+        <div class="richy-actions">
+          <button type="button" class="richy-btn richy-btn--p" id="richy-replay">重播</button>
+          <button type="button" class="richy-btn" id="richy-cdn">CDN 重建</button>
         </div>
       </header>
-      <video id="avjb-full-video" controls playsinline></video>
-      <div class="avjb-extra-seek">
-        <span id="avjb-cur">0:00</span>
-        <input type="range" id="avjb-range" min="0" max="10000" value="0" step="1">
-        <span id="avjb-dur">0:00</span>
+      <div class="richy-stage">
+        <video id="richy-video" playsinline></video>
       </div>
-      <div class="avjb-foot" id="avjb-full-status"></div>
+      <div class="richy-error" id="richy-error"></div>
     `;
 
     const mount =
@@ -284,142 +245,97 @@
       document.body.prepend(box);
     }
 
-    box.querySelector('#poc-replay').addEventListener('click', () => main({ force: true }));
-    box.querySelector('#poc-opencdn').addEventListener('click', () => main({ forceOpenCdn: true }));
+    box.querySelector('#richy-replay').addEventListener('click', () => main({ force: true }));
+    box.querySelector('#richy-cdn').addEventListener('click', () => main({ forceOpenCdn: true }));
     return box;
   }
 
-  function setPlayerError(msg) {
-    const box = document.getElementById('avjb-full-poc');
-    const el = document.getElementById('avjb-full-status');
-    if (!box || !el) return;
-    if (msg) { box.classList.add('avjb-has-error'); el.textContent = msg; }
-    else { box.classList.remove('avjb-has-error'); el.textContent = ''; }
+  function showError(msg) {
+    const box = document.getElementById('richy-box');
+    const el = document.getElementById('richy-error');
+    if (box && el) { box.classList.toggle('has-error', !!msg); el.textContent = msg || ''; }
   }
 
-  function wireSeekbar(video) {
-    const range = document.getElementById('avjb-range');
-    const curEl = document.getElementById('avjb-cur');
-    const durEl = document.getElementById('avjb-dur');
-    if (!range || !video) return;
-
-    let dragging = false;
-
-    video.addEventListener('loadedmetadata', () => {
-      durEl.textContent = fmtTime(video.duration);
-    });
-    video.addEventListener('durationchange', () => {
-      durEl.textContent = fmtTime(video.duration);
-    });
-    video.addEventListener('timeupdate', () => {
-      if (dragging) return;
-      const d = video.duration || 1;
-      range.value = Math.round((video.currentTime / d) * 10000);
-      curEl.textContent = fmtTime(video.currentTime);
-    });
-
-    // input = 拖动中实时触发
-    range.addEventListener('input', () => {
-      dragging = true;
-      const d = video.duration || 1;
-      curEl.textContent = fmtTime((range.value / 10000) * d);
-    });
-    // change = 松手
-    range.addEventListener('change', () => {
-      const d = video.duration || 1;
-      video.currentTime = (range.value / 10000) * d;
-      dragging = false;
-    });
-
-    // 阻止触摸事件冒泡，不让页面其他 handler 抢走
-    ['touchstart','touchmove','touchend'].forEach(evtName => {
-      range.addEventListener(evtName, e => e.stopPropagation(), { passive: true });
-    });
-  }
-
-  async function playFull(m3u8, meta) {
+  async function playFull(m3u8) {
     wipeOfficialPlayer();
     ensureMount();
+    showError('');
 
-    const video = document.getElementById('avjb-full-video');
-    setPlayerError('');
+    const video = document.getElementById('richy-video');
 
-    if (window.__AVJB_HLS__) {
-      try { window.__AVJB_HLS__.destroy(); } catch (_) {}
-    }
+    // Destroy previous instances
+    if (window.__RICHY_HLS__) { try { window.__RICHY_HLS__.destroy(); } catch(_){} }
+    if (window.__RICHY_PLYR__) { try { window.__RICHY_PLYR__.destroy(); } catch(_){} }
 
-    const Hls = await loadHls();
+    const [Hls, Plyr] = await Promise.all([loadHls(), loadPlyr()]);
+
+    // Init Plyr
+    const plyr = new Plyr(video, {
+      controls: ['play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'fullscreen'],
+      clickToPlay: true,
+      hideControls: true,
+      tooltips: { controls: false, seek: true },
+      fullscreen: { enabled: true, fallback: true, iosNative: true },
+    });
+    window.__RICHY_PLYR__ = plyr;
+
+    // Init HLS
     if (Hls.isSupported()) {
       const hls = new Hls({ enableWorker: true, maxBufferLength: 60 });
-      window.__AVJB_HLS__ = hls;
+      window.__RICHY_HLS__ = hls;
       hls.loadSource(m3u8);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, async () => {
-        try { await video.play(); } catch (_) {}
-      });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(()=>{}); });
       hls.on(Hls.Events.ERROR, (_, data) => {
-        setPlayerError('播放失败，可尝试 CDN 重建');
-        log('hls error', data);
+        if (data.fatal) showError('播放失败，可尝试 CDN 重建');
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // iOS native HLS
       video.src = m3u8;
-      try { await video.play(); } catch (_) {}
+      video.addEventListener('loadedmetadata', () => { video.play().catch(()=>{}); }, { once: true });
     } else {
-      setPlayerError('当前浏览器无法播放');
+      showError('浏览器不支持播放');
       return;
     }
 
-    wireSeekbar(video);
-    window.__AVJB_FULL__ = { m3u8, meta, video };
-    log('FULL player mounted', { m3u8, meta });
+    log('Plyr + HLS mounted', m3u8);
   }
 
-  function panel(state) {
-    if (!state.m3u8) { ensureMount(); setPlayerError('未能获取完整流'); }
-  }
-
+  // ===== Main =====
   async function main(opts = {}) {
     const videoId = videoIdFromLocation();
     if (!videoId) { log('not a video page'); return; }
-    if (!document.body) await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
+    if (!document.body) await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
 
-    const state = { videoId, source: null, m3u8: null, totalMin: null, segs: null, timeLimit: null };
     try {
-      let m3u8 = null, source = null, timeLimit = null, probe = null;
+      let m3u8 = null, probe = null;
 
       if (!opts.forceOpenCdn) {
         if (/\/newembed\//.test(location.pathname)) {
           m3u8 = extractFromPageScripts();
-          source = 'embed-page-inline';
         }
         if (!m3u8) {
           const emb = await fetchEmbedM3u8(videoId);
-          m3u8 = emb.m3u8; timeLimit = emb.timeLimit;
-          source = 'newembed-fetch'; state.timeLimit = timeLimit;
+          m3u8 = emb.m3u8;
           log('embed result', emb);
         }
         if (m3u8) {
           probe = await probePlaylist(m3u8);
-          log('playlist probe', probe);
           if (probe.totalSec && probe.totalSec <= 20) { m3u8 = null; }
         }
       }
 
       if (!m3u8 || opts.forceOpenCdn) {
         const built = await buildOpenCdnPlaylist(videoId, probe?.segs || null);
-        m3u8 = built.url; source = 'open-cdn-reconstructed';
-        probe = { segs: built.count, totalMin: built.approxMin, totalSec: built.count * 2 };
-        log('open CDN playlist', built);
+        m3u8 = built.url;
+        log('open CDN playlist', built.count, 'segments');
       }
 
-      state.m3u8 = m3u8; state.source = source;
-      state.segs = probe?.segs; state.totalMin = probe?.totalMin;
-      panel(state);
-      if (!m3u8) { log('FAILED'); return; }
-      await playFull(m3u8, { ...probe, source });
+      if (!m3u8) { ensureMount(); showError('未能获取完整流'); return; }
+      await playFull(m3u8);
     } catch (e) {
-      log('main error', e);
-      panel({ ...state, m3u8: String(e) });
+      log('error', e);
+      ensureMount(); showError(String(e.message || e));
     }
   }
 
@@ -432,5 +348,5 @@
     }
   }
 
-  window.__AVJB_FULL_POC__ = { main, fetchEmbedM3u8, buildOpenCdnPlaylist, playFull };
+  window.__RICHY__ = { main, playFull, buildOpenCdnPlaylist };
 })();
