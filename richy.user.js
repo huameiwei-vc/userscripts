@@ -8,8 +8,8 @@
 // @run-at       document-start
 // @grant        none
 // @icon         data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0d12"/><circle cx="32" cy="32" r="14" fill="%23e11d48"/><polygon points="28,24 42,32 28,40" fill="white"/></svg>
-// @downloadURL  https://raw.githubusercontent.com/huameiwei-vc/studio-workspace/main/output/richy.user.js
-// @updateURL    https://raw.githubusercontent.com/huameiwei-vc/studio-workspace/main/output/richy.user.js
+// @downloadURL  https://raw.githubusercontent.com/huameiwei-vc/userscripts/main/richy.user.js
+// @updateURL    https://raw.githubusercontent.com/huameiwei-vc/userscripts/main/richy.user.js
 // ==/UserScript==
 
 (function () {
