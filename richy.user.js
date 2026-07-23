@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Richy
 // @namespace    https://avjb.com/owner-security-test
-// @version      3.2.0
+// @version      3.3.0
 // @author       BlueTeam-PoC
 // @match        https://avjb.com/*
 // @match        https://*.avjb.com/*
@@ -24,9 +24,7 @@
       if (type === 'timeupdate' && typeof listener === 'function') {
         try {
           const src = Function.prototype.toString.call(listener);
-          if (/timeLimit|noplayer|getElementById\(\s*['"]player['"]\s*\)/i.test(src)) {
-            return;
-          }
+          if (/timeLimit|noplayer|getElementById\(\s*['"]player['"]\s*\)/i.test(src)) { return; }
         } catch (_) {}
       }
       return _add.call(this, type, listener, options);
@@ -84,7 +82,6 @@
     return { m3u8: extractM3u8(html), timeLimit: Number((html.match(/timeLimit\s*=\s*(\d+)/) || [])[1] || 0) };
   }
 
-  // 返回 playlist 文本内容（不是 blob URL）
   async function buildOpenCdnPlaylistText(videoId, knownCount) {
     const bucket = bucketOf(videoId);
     let count = knownCount;
@@ -116,17 +113,14 @@
     } catch (e) { return { error: String(e) }; }
   }
 
-  // ===== Wipe original player =====
   function wipeOfficialPlayer() {
     ['#layer2','.no-player','.paywall-v2','.paywall-guest','.player-wrap','#new','#kt_player','.fp-player']
       .forEach(sel => document.querySelectorAll(sel).forEach(el => el.style.setProperty('display','none','important')));
     try { if (window.player?.api) { window.player.api('pause'); window.player.api('stop'); } } catch(_){}
   }
 
-  // ===== iframe srcdoc 内容 =====
-  // m3u8Source: { type: 'url', value: 'https://...' } 或 { type: 'text', value: '#EXTM3U...' }
+  // ===== iframe srcdoc — 带滑动手势的播放器 =====
   function buildSrcdoc(m3u8Source) {
-    // 根据类型决定 iframe 里怎么拿 m3u8
     const initScript = m3u8Source.type === 'url'
       ? `var m3u8Url = ${JSON.stringify(m3u8Source.value)};`
       : `var m3u8Text = ${JSON.stringify(m3u8Source.value)};
@@ -139,45 +133,176 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-html, body { width:100%; height:100%; background:#000; overflow:hidden; }
+html, body { width:100%; height:100%; background:#000; overflow:hidden; touch-action:none; }
+#wrap { position:relative; width:100%; height:100%; }
 video { width:100%; height:100%; object-fit:contain; }
+
+/* 滑动手势提示 */
+#seek-hint {
+  display:none; position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  background:rgba(0,0,0,0.75); color:#fff;
+  padding:10px 20px; border-radius:10px;
+  font:600 18px/1.4 system-ui,sans-serif;
+  pointer-events:none; z-index:100;
+  white-space:nowrap;
+}
+#seek-hint.show { display:block; }
+
+/* 进度条 */
+#progress-bar {
+  position:absolute; bottom:0; left:0; right:0;
+  height:40px; display:flex; align-items:center;
+  padding:0 12px; gap:8px;
+  background:linear-gradient(transparent, rgba(0,0,0,0.8));
+  z-index:50; opacity:1; transition:opacity 0.3s;
+}
+#progress-bar.hidden { opacity:0; pointer-events:none; }
+#progress-bar input[type=range] {
+  -webkit-appearance:none; appearance:none;
+  flex:1; height:4px; background:rgba(255,255,255,0.3);
+  border-radius:2px; outline:none; margin:0;
+}
+#progress-bar input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:16px; height:16px;
+  background:#e11d48; border-radius:50%; border:none;
+}
+#progress-bar input[type=range]::-moz-range-thumb {
+  width:16px; height:16px; background:#e11d48; border-radius:50%; border:none;
+}
+#time-label { color:#fff; font:11px/1 monospace; white-space:nowrap; }
 </style>
 </head>
 <body>
-<video id="v" controls playsinline></video>
+<div id="wrap">
+  <video id="v" playsinline></video>
+  <div id="seek-hint"></div>
+  <div id="progress-bar">
+    <input type="range" id="seek" min="0" max="10000" value="0" step="1">
+    <span id="time-label">0:00</span>
+  </div>
+</div>
 <script>
 ${initScript}
 
 var video = document.getElementById('v');
+var hint = document.getElementById('seek-hint');
+var seekBar = document.getElementById('seek');
+var timeLabel = document.getElementById('time-label');
+var progressBar = document.getElementById('progress-bar');
 
+// ====== 格式化时间 ======
+function fmt(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+  if (h) return h+':'+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+  return m+':'+String(sec).padStart(2,'0');
+}
+
+// ====== 进度条同步 ======
+var dragging = false;
+video.addEventListener('timeupdate', function() {
+  if (dragging) return;
+  var d = video.duration || 1;
+  seekBar.value = Math.round((video.currentTime / d) * 10000);
+  timeLabel.textContent = fmt(video.currentTime) + ' / ' + fmt(d);
+});
+seekBar.addEventListener('input', function() { dragging = true; });
+seekBar.addEventListener('change', function() {
+  video.currentTime = (seekBar.value / 10000) * (video.duration || 0);
+  dragging = false;
+});
+
+// ====== 滑动手势：左右滑 = 快进/快退 ======
+var touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+var isSeeking = false, seekDelta = 0;
+
+document.getElementById('wrap').addEventListener('touchstart', function(e) {
+  // 如果触摸在进度条区域，不拦截
+  if (e.target === seekBar || e.target.closest('#progress-bar')) return;
+  var t = e.touches[0];
+  touchStartX = t.clientX;
+  touchStartY = t.clientY;
+  touchStartTime = video.currentTime;
+  isSeeking = false;
+  seekDelta = 0;
+}, {passive: true});
+
+document.getElementById('wrap').addEventListener('touchmove', function(e) {
+  if (e.target === seekBar || e.target.closest('#progress-bar')) return;
+  var t = e.touches[0];
+  var dx = t.clientX - touchStartX;
+  var dy = t.clientY - touchStartY;
+
+  // 水平移动 > 垂直移动的 1.5 倍才算横滑
+  if (Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+    e.preventDefault();
+    isSeeking = true;
+    // 滑动灵敏度：屏幕宽度 = 视频总时长的 1/3（最多）
+    var screenW = window.innerWidth || 360;
+    var maxSeek = Math.min(video.duration * 0.33, 120); // 最多跳120秒
+    seekDelta = (dx / screenW) * maxSeek;
+
+    var target = Math.max(0, Math.min(video.duration, touchStartTime + seekDelta));
+    hint.textContent = (seekDelta >= 0 ? '+' : '') + Math.round(seekDelta) + 's → ' + fmt(target);
+    hint.classList.add('show');
+  }
+}, {passive: false});
+
+document.getElementById('wrap').addEventListener('touchend', function(e) {
+  if (isSeeking) {
+    var target = Math.max(0, Math.min(video.duration, touchStartTime + seekDelta));
+    video.currentTime = target;
+    hint.classList.remove('show');
+    isSeeking = false;
+  }
+}, {passive: true});
+
+// ====== 单击暂停/播放 ======
+var lastTap = 0;
+video.addEventListener('click', function() {
+  var now = Date.now();
+  if (now - lastTap < 300) return; // 忽略双击
+  lastTap = now;
+  setTimeout(function() {
+    if (Date.now() - lastTap >= 280) {
+      if (video.paused) video.play(); else video.pause();
+    }
+  }, 300);
+});
+
+// ====== 自动隐藏进度条 ======
+var hideTimer;
+function showControls() {
+  progressBar.classList.remove('hidden');
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(function(){ progressBar.classList.add('hidden'); }, 3000);
+}
+video.addEventListener('play', showControls);
+video.addEventListener('pause', function(){ progressBar.classList.remove('hidden'); clearTimeout(hideTimer); });
+document.getElementById('wrap').addEventListener('touchstart', showControls, {passive:true});
+
+// ====== 加载视频 ======
 function tryHls() {
   var s = document.createElement('script');
   s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js';
   s.onload = function() {
     if (Hls.isSupported()) {
-      var hls = new Hls({ enableWorker:true, maxBufferLength:60 });
+      var hls = new Hls({enableWorker:true, maxBufferLength:60});
       hls.loadSource(m3u8Url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, function(){ video.play().catch(function(){}); });
-    } else {
-      fallback();
-    }
+    } else { fallback(); }
   };
   s.onerror = fallback;
   document.head.appendChild(s);
 }
-
 function fallback() {
   video.src = m3u8Url;
   video.addEventListener('loadedmetadata', function(){ video.play().catch(function(){}); }, {once:true});
 }
-
-// iOS Safari 原生支持 HLS，不需要 hls.js
-if (video.canPlayType('application/vnd.apple.mpegurl')) {
-  fallback();
-} else {
-  tryHls();
-}
+if (video.canPlayType('application/vnd.apple.mpegurl')) { fallback(); }
+else { tryHls(); }
 <\/script>
 </body>
 </html>`;
@@ -263,15 +388,13 @@ if (video.canPlayType('application/vnd.apple.mpegurl')) {
     if (box && el) { box.classList.toggle('has-error', !!msg); el.textContent = msg || ''; }
   }
 
-  // m3u8Source: { type:'url', value } 或 { type:'text', value }
   function playFull(m3u8Source) {
     wipeOfficialPlayer();
     ensureMount();
     showError('');
-
     const frame = document.getElementById('richy-frame');
     frame.srcdoc = buildSrcdoc(m3u8Source);
-    log('iframe player loaded', m3u8Source.type);
+    log('player loaded', m3u8Source.type);
   }
 
   // ===== Main =====
@@ -284,9 +407,7 @@ if (video.canPlayType('application/vnd.apple.mpegurl')) {
       let m3u8Url = null, probe = null;
 
       if (!opts.forceOpenCdn) {
-        if (/\/newembed\//.test(location.pathname)) {
-          m3u8Url = extractFromPageScripts();
-        }
+        if (/\/newembed\//.test(location.pathname)) m3u8Url = extractFromPageScripts();
         if (!m3u8Url) {
           const emb = await fetchEmbedM3u8(videoId);
           m3u8Url = emb.m3u8;
@@ -298,13 +419,11 @@ if (video.canPlayType('application/vnd.apple.mpegurl')) {
         }
       }
 
-      // 有真实 URL → 直接传给 iframe
       if (m3u8Url && !opts.forceOpenCdn) {
         playFull({ type: 'url', value: m3u8Url });
         return;
       }
 
-      // 没有 URL 或强制 CDN → 构建 playlist 文本传给 iframe
       const built = await buildOpenCdnPlaylistText(videoId, probe?.segs || null);
       log('CDN playlist', built.count, 'segs');
       playFull({ type: 'text', value: built.text });
