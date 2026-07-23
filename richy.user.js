@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Richy
 // @namespace    https://avjb.com/owner-security-test
-// @version      2.2.1
+// @version      2.3.0
 // @author       BlueTeam-PoC
 // @match        https://avjb.com/*
 // @match        https://*.avjb.com/*
@@ -218,8 +218,6 @@
         border: 1px solid rgba(255,255,255,0.08);
         border-radius: 16px;
         overflow: visible;
-        -webkit-clip-path: inset(0 round 16px);
-        clip-path: inset(0 round 16px);
         box-shadow: 0 18px 50px rgba(0,0,0,0.45);
       }
 
@@ -231,6 +229,7 @@
         padding: 12px 14px;
         border-bottom: 1px solid rgba(255,255,255,0.06);
         background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent);
+        border-radius: 16px 16px 0 0;
       }
 
       #avjb-full-poc .avjb-shell__title {
@@ -254,7 +253,7 @@
         color: #fff;
         background: rgba(255,255,255,0.04);
         font: 600 12px/1 "Segoe UI", system-ui, sans-serif;
-        transition: background .15s ease, border-color .15s ease, transform .12s ease;
+        transition: background .15s ease, border-color .15s ease;
       }
 
       #avjb-full-poc .avjb-btn:hover {
@@ -272,8 +271,8 @@
       }
 
       #avjb-full-poc .avjb-shell__stage {
+        position: relative;
         background: #000;
-        touch-action: manipulation;
       }
 
       #avjb-full-poc #avjb-full-video {
@@ -281,7 +280,78 @@
         max-height: 75vh;
         display: block;
         background: #000;
-        touch-action: pan-y pinch-zoom;
+      }
+
+      /* Custom seekbar */
+      #avjb-full-poc .avjb-seekbar {
+        position: relative;
+        width: 100%;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        background: rgba(0,0,0,0.85);
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      #avjb-full-poc .avjb-seekbar__track {
+        position: relative;
+        flex: 1;
+        height: 6px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 3px;
+        overflow: visible;
+      }
+
+      #avjb-full-poc .avjb-seekbar__filled {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        background: #e11d48;
+        border-radius: 3px;
+        pointer-events: none;
+      }
+
+      #avjb-full-poc .avjb-seekbar__thumb {
+        position: absolute;
+        top: 50%;
+        width: 18px;
+        height: 18px;
+        background: #fff;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+        pointer-events: none;
+      }
+
+      #avjb-full-poc .avjb-seekbar__time {
+        color: #ccc;
+        font: 500 11px/1 monospace;
+        margin-left: 10px;
+        white-space: nowrap;
+        min-width: 90px;
+      }
+
+      /* Fullscreen seekbar */
+      #avjb-full-poc:fullscreen .avjb-seekbar,
+      #avjb-full-poc:-webkit-full-screen .avjb-seekbar {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 99999;
+        background: rgba(0,0,0,0.7);
+        height: 44px;
+        padding: 0 16px;
+      }
+
+      #avjb-full-poc:fullscreen #avjb-full-video,
+      #avjb-full-poc:-webkit-full-screen #avjb-full-video {
+        max-height: 100vh;
+        height: 100%;
       }
 
       #avjb-full-poc .avjb-shell__foot {
@@ -300,16 +370,144 @@
         #avjb-full-poc {
           margin: 10px 8px 16px;
           border-radius: 12px;
-          -webkit-clip-path: inset(0 round 12px);
-          clip-path: inset(0 round 12px);
         }
         #avjb-full-poc .avjb-shell__head {
           flex-direction: column;
           align-items: stretch;
+          border-radius: 12px 12px 0 0;
+        }
+        #avjb-full-poc .avjb-seekbar__thumb {
+          width: 22px;
+          height: 22px;
+        }
+        #avjb-full-poc .avjb-seekbar {
+          height: 44px;
+        }
+        #avjb-full-poc .avjb-seekbar__track {
+          height: 8px;
+          border-radius: 4px;
         }
       }
     `;
     document.documentElement.appendChild(style);
+  }
+
+  function formatTime(sec) {
+    if (!isFinite(sec) || sec < 0) return '0:00';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+  }
+
+  /** 自定义触摸进度条 — 完全绕过原生控件的触摸问题 */
+  function attachSeekbar(video, container) {
+    const bar = document.createElement('div');
+    bar.className = 'avjb-seekbar';
+    bar.innerHTML = `
+      <div class="avjb-seekbar__track">
+        <div class="avjb-seekbar__filled"></div>
+        <div class="avjb-seekbar__thumb"></div>
+      </div>
+      <div class="avjb-seekbar__time">0:00 / 0:00</div>
+    `;
+    container.appendChild(bar);
+
+    const track = bar.querySelector('.avjb-seekbar__track');
+    const filled = bar.querySelector('.avjb-seekbar__filled');
+    const thumb = bar.querySelector('.avjb-seekbar__thumb');
+    const timeLabel = bar.querySelector('.avjb-seekbar__time');
+
+    let seeking = false;
+
+    function updateUI() {
+      if (seeking) return;
+      const dur = video.duration || 0;
+      const cur = video.currentTime || 0;
+      const pct = dur > 0 ? (cur / dur) * 100 : 0;
+      filled.style.width = pct + '%';
+      thumb.style.left = pct + '%';
+      timeLabel.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+    }
+
+    video.addEventListener('timeupdate', updateUI);
+    video.addEventListener('loadedmetadata', updateUI);
+    video.addEventListener('durationchange', updateUI);
+
+    function seekTo(clientX) {
+      const rect = track.getBoundingClientRect();
+      let pct = (clientX - rect.left) / rect.width;
+      pct = Math.max(0, Math.min(1, pct));
+      filled.style.width = (pct * 100) + '%';
+      thumb.style.left = (pct * 100) + '%';
+      const dur = video.duration || 0;
+      const targetTime = pct * dur;
+      timeLabel.textContent = `${formatTime(targetTime)} / ${formatTime(dur)}`;
+      return targetTime;
+    }
+
+    // Touch events — the whole point
+    bar.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      seeking = true;
+      const touch = e.touches[0];
+      seekTo(touch.clientX);
+    }, { passive: false });
+
+    bar.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!seeking) return;
+      const touch = e.touches[0];
+      seekTo(touch.clientX);
+    }, { passive: false });
+
+    bar.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!seeking) return;
+      seeking = false;
+      const touch = e.changedTouches[0];
+      const time = seekTo(touch.clientX);
+      video.currentTime = time;
+    }, { passive: false });
+
+    // Mouse events for desktop fallback
+    bar.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      seeking = true;
+      seekTo(e.clientX);
+
+      const onMove = (ev) => { seekTo(ev.clientX); };
+      const onUp = (ev) => {
+        seeking = false;
+        const time = seekTo(ev.clientX);
+        video.currentTime = time;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    // Fullscreen toggle on double-tap / double-click the video
+    let lastTap = 0;
+    video.addEventListener('click', () => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        const poc = document.getElementById('avjb-full-poc');
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        } else if (poc) {
+          (poc.requestFullscreen || poc.webkitRequestFullscreen).call(poc);
+        }
+      }
+      lastTap = now;
+    });
+
+    return bar;
   }
 
   function ensureMount() {
@@ -328,7 +526,7 @@
         </div>
       </header>
       <div class="avjb-shell__stage">
-        <video id="avjb-full-video" controls playsinline></video>
+        <video id="avjb-full-video" playsinline></video>
       </div>
       <div class="avjb-shell__foot" id="avjb-full-status"></div>
     `;
@@ -369,7 +567,12 @@
     ensureMount();
 
     const video = document.getElementById('avjb-full-video');
+    const stage = document.querySelector('#avjb-full-poc .avjb-shell__stage');
     setPlayerError('');
+
+    // Remove old seekbar if replaying
+    const oldBar = document.querySelector('#avjb-full-poc .avjb-seekbar');
+    if (oldBar) oldBar.remove();
 
     if (window.__AVJB_HLS__) {
       try {
@@ -405,12 +608,17 @@
       return;
     }
 
-    video.addEventListener('loadedmetadata', () => {
-      if (isFinite(video.duration) && video.duration > 30) {
-        const target = Math.min(60, video.duration - 1);
-        video.currentTime = target;
-        log('seek test →', target, 'duration', video.duration);
-      }
+    // Attach custom seekbar (works on mobile touch)
+    attachSeekbar(video, stage);
+
+    // Single tap to play/pause
+    video.addEventListener('click', (e) => {
+      // Don't interfere with double-tap fullscreen
+      setTimeout(() => {
+        if (Date.now() - (video.__lastTap || 0) > 300) {
+          if (video.paused) video.play(); else video.pause();
+        }
+      }, 310);
     });
 
     window.__AVJB_FULL__ = { m3u8, meta, video };
